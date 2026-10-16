@@ -1,0 +1,14 @@
+[project]
+name = "grsubgraphmatching"
+version = "0.1.0"
+description = "Graph pattern mining and query subgraph sampling utilities"
+requires-python = ">=3.12.15,<3.12.16"
+dependencies = [
+    "networkx==3.7",
+]
+
+[tool.uv]
+package = false
+required-version = "==0.12.23"
+python-downloads = "automatic"
+python-preference = "only-managed"

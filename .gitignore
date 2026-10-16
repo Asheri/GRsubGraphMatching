@@ -1,0 +1,5 @@
+.venv/
+.uv-python/
+__pycache__/
+*.py[cod]
+.agent-execution-ledger.md
