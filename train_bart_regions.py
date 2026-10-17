@@ -14,6 +14,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import networkx as nx
 import torch
+import transformers
 from transformers import BartForConditionalGeneration
 
 from bart_region_model import generate_paths, make_model, set_seed
@@ -184,11 +185,16 @@ def train(data_dir: Path, run_dir: Path, *, seed: int, device_name: str, epochs:
         print(json.dumps({"seed": seed, "device": device_name, "epoch": epoch + 1, "train_loss": epoch_loss}, ensure_ascii=False), flush=True)
     run_metadata = {
         "seed": seed, "device": device_name, "gpu_name": torch.cuda.get_device_name(device_index),
+        "nvidia_driver": subprocess.run(
+            ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
+            capture_output=True, text=True, check=True,
+        ).stdout.splitlines()[device_index].strip(),
         "epochs": epochs, "best_train_loss": best_loss, "train_examples": len(rows),
         "model": {"d_model": 128, "encoder_layers": 2, "decoder_layers": 2, "heads": 4},
         "optimizer": "AdamW", "learning_rate": 3e-4, "weight_decay": 0.01,
         "batch_size": 1, "max_input_length": MAX_INPUT_LENGTH, "max_target_length": MAX_TARGET_LENGTH,
-        "torch": torch.__version__, "cuda_runtime": torch.version.cuda,
+        "torch": torch.__version__, "transformers": transformers.__version__,
+        "cuda_runtime": torch.version.cuda,
         "seconds": time.perf_counter() - started,
     }
     _write_json(run_dir / "training_history.json", history)
