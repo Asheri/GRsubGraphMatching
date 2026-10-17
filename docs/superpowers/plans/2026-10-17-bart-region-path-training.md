@@ -123,6 +123,7 @@ uv run python train_bart_regions.py evaluate --data-dir artifacts/bart_region_pa
 - [ ] 写明 3 张训练图/1 张测试图、固定 10-query 的评估边界、路径定义、指标公式、预算截断状态和结果仅是合成跨图可行性证据。
 - [ ] 文档列出先 `uv sync --locked`、再 `prepare`、三 GPU 并行 `train`、最后 `evaluate` 的服务器命令，以及所有输出文件解释。
 - [ ] SSH 服务器运行前记录 `nvidia-smi`、GPU 数量、CUDA 驱动、`uv --version`、Python 与依赖版本；确认 GPU 数为 3 后再启动训练。
+- [ ] 服务器原 `/home/zuohaonan/GRsubGraphMatching` 不是独立 Git 根目录，其 `.git` 位于 `/home/zuohaonan`，且父仓库状态异常；不在该目录同步或安装。新建隔离运行目录 `/home/zuohaonan/GRsubGraphMatching-bart-run`，只同步已提交代码和配置，再在该目录中安装与训练。
 - [ ] 如训练阶段发生任何错误，先按全局 `AGENTS.md` 要求汇总此前已知训练错误，并追加到 `C:\Users\12062\OneDrive\Desktop\items\training-errors.md`；后续每次新错误继续追加时间、阶段、日志、根因、修复和验证信息。
 - [ ] 完成 3 个随机种子运行后，按指标与基线如实报告结果；若某进程失败，保留其它已完成结果并将整体实验标为不完整，不伪造均值。
 
