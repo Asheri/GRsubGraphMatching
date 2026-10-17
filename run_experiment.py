@@ -81,6 +81,34 @@ def _match_record(record: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _select_covering_occurrences(occurrences: Sequence[PatternOccurrence], limit: int) -> List[PatternOccurrence]:
+    """贪心去除冗余叶实例，同时覆盖所有基础模式实例涉及的宿主节点。"""
+    if limit < 1:
+        raise ValueError("max_index_occurrences 必须大于 0。")
+    remaining = list(occurrences)
+    uncovered = set().union(*(set(item.nodes) for item in remaining)) if remaining else set()
+    selected: List[PatternOccurrence] = []
+    while uncovered:
+        ranked = sorted(
+            remaining,
+            key=lambda item: (-len(set(item.nodes).intersection(uncovered)), item.type_id, item.occurrence_id),
+        )
+        if not ranked:
+            raise RuntimeError("无法用基础模式实例覆盖全部模式节点。")
+        chosen = ranked[0]
+        gain = set(chosen.nodes).intersection(uncovered)
+        if not gain:
+            raise RuntimeError("基础模式覆盖贪心选择陷入停滞。")
+        selected.append(chosen)
+        if len(selected) > limit:
+            raise RuntimeError(
+                f"覆盖全部基础模式节点至少需要超过 {limit} 个叶实例；请提高 --max-index-occurrences。"
+            )
+        uncovered.difference_update(gain)
+        remaining.remove(chosen)
+    return selected
+
+
 def _write_jsonl(path: Path, records: Iterable[Dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="\n") as output:
@@ -104,6 +132,7 @@ def run_experiment(
     max_height: int = 3,
     min_promotion_support: int = 2,
     max_candidates_per_level: int = 5000,
+    max_index_occurrences: Optional[int] = None,
     max_matches_per_query: Optional[int] = 100000,
     flexis_bound: Optional[int] = None,
     flexis_bin: Optional[str] = None,
@@ -143,6 +172,9 @@ def run_experiment(
     )
     if not occurrences:
         raise RuntimeError("没有满足最低支持度的基础模式实例。")
+    total_occurrence_count = len(occurrences)
+    if max_index_occurrences is not None:
+        occurrences = _select_covering_occurrences(occurrences, max_index_occurrences)
 
     hierarchy = build_hierarchy(
         dataset.graph,
@@ -184,6 +216,12 @@ def run_experiment(
         for occurrence in sorted(occurrences, key=lambda item: item.occurrence_id)
     ])
     _write_json(output_dir / "occurrence_enumeration.json", occurrence_completeness)
+    _write_json(output_dir / "index_occurrence_selection.json", {
+        "full_occurrence_count": total_occurrence_count,
+        "selected_occurrence_count": len(occurrences),
+        "max_index_occurrences": max_index_occurrences,
+        "selected_for_complete_base_node_union": max_index_occurrences is not None,
+    })
     _write_json(output_dir / "index_regions.json", region_records(hierarchy, index_only=True))
     _write_json(output_dir / "composition_regions.json", region_records(hierarchy))
     _write_json(output_dir / "composition_candidates.json", candidate_records(hierarchy))
@@ -281,6 +319,7 @@ def run_experiment(
         "query_count": len(dataset.queries),
         "pattern_type_count": len(all_pattern_types),
         "occurrence_count": len(occurrences),
+        "full_occurrence_count": total_occurrence_count,
         "candidate_count": len(hierarchy.candidates),
         "root_id": hierarchy.root_id,
         "index_build_seconds": time.perf_counter() - experiment_started,
@@ -311,6 +350,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-height", type=int, default=3)
     parser.add_argument("--min-promotion-support", type=int, default=2)
     parser.add_argument("--max-candidates-per-level", type=int, default=5000)
+    parser.add_argument("--max-index-occurrences", type=int)
     parser.add_argument("--max-matches-per-query", type=int, default=100000)
     parser.add_argument("--flexis-bound", type=int)
     parser.add_argument("--flexis-bin")
@@ -339,6 +379,7 @@ def main() -> None:
         max_height=args.max_height,
         min_promotion_support=args.min_promotion_support,
         max_candidates_per_level=args.max_candidates_per_level,
+        max_index_occurrences=args.max_index_occurrences,
         max_matches_per_query=args.max_matches_per_query,
         flexis_bound=args.flexis_bound,
         flexis_bin=args.flexis_bin,

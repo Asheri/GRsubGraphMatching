@@ -97,6 +97,7 @@ def prepare(
             tau=0.30,
             max_height=2,
             max_candidates_per_level=5000,
+            max_index_occurrences=512,
             max_matches_per_query=max_matches_per_query,
             region_size_limits=(4, 6, 8, 12),
             retrieval_budgets=(None, 5),

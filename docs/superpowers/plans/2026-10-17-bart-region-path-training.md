@@ -52,6 +52,7 @@ uv run python -c "import torch, transformers, networkx; print(torch.__version__,
 - [ ] 为 `run_experiment()` 增加 `graph_id` 参数，传入数据生成器，并将其用于 `graph.json`、`matches.jsonl`、Oracle 行及摘要；保持既有默认行为 `G0`。
 - [ ] 每个植入 query 实例额外加确定性覆盖脚手架：3 节点补成三角形、4 节点补成三叶星、5 节点补成共享中心的两个三角形；原 query 边保留，脚手架边单独写入 provenance。扰动边只在模式覆盖节点间采样，噪声节点保持隔离。
 - [ ] 精确枚举每个 query 的最终匹配后，校验每个匹配节点集合都被三角形/四环/三叶星基础实例覆盖；违反时中止数据构建并写明未覆盖实例。
+- [ ] 为适配 BART 输入上限，在不丢失任何基础模式覆盖节点的前提下，用确定性贪心集合覆盖去除冗余叶实例，最多保留 512 个；将全量枚举数、保留数和匹配节点覆盖核验结果分别记录。超出上限时显式失败。
 - [ ] 新建编排函数，分别以图种子 `7, 8, 9` 生成 `G_train_0..2`，以种子 `10` 生成 `G_test_0`；四张图使用相同的 query 结构、植入次数和扰动上限，各自独立构造模式实例及层次树。
 - [ ] 使用 `tau=0.30`、`max_height=2`、`max_candidates_per_level=5000` 做最小规模运行；每张图的 `hierarchy_summary.json` 必须原样保留 `possible_pair_count`、`explored_pair_count`、`budget_hit` 和 `exhaustive`，不把预算截断结果误报为穷举。
 - [ ] 将四张图的图 ID、随机种子、query ID、split、`tau/R/H`、候选预算、VF2 完整枚举状态写入 `split_manifest.json`；测试图数据只放测试目录，训练数据加载接口禁止枚举该目录。
