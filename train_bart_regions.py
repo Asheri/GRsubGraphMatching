@@ -416,6 +416,8 @@ def _evaluate_one_seed(data_dir: Path, runs_dir: Path, output_dir: Path, seed: i
             if not paths:
                 invalid_reasons["no_path"] = invalid_reasons.get("no_path", 0) + 1
             for path in paths:
+                if len(predicted_region_ids) >= 5:
+                    break
                 region_id = path_to_region.get(path)
                 if region_id is None:
                     invalid_reasons["unreachable_path"] = invalid_reasons.get("unreachable_path", 0) + 1
