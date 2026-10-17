@@ -5,6 +5,8 @@ description = "Graph pattern mining and query subgraph sampling utilities"
 requires-python = ">=3.12.15,<3.12.16"
 dependencies = [
     "networkx==3.7",
+    "torch==2.6.0",
+    "transformers==4.49.0",
 ]
 
 [tool.uv]
@@ -12,3 +14,11 @@ package = false
 required-version = "==0.12.23"
 python-downloads = "automatic"
 python-preference = "only-managed"
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }
