@@ -92,6 +92,7 @@ def run_experiment(
     *,
     output_dir: Path,
     seed: int = 7,
+    graph_id: str = "G0",
     copies_per_query: int = 5,
     extra_nodes: int = 15,
     extra_edges: int = 15,
@@ -115,6 +116,7 @@ def run_experiment(
     experiment_started = time.perf_counter()
     dataset: SyntheticDataset = generate_synthetic_dataset(
         seed=seed,
+        graph_id=graph_id,
         copies_per_query=copies_per_query,
         max_extra_nodes=extra_nodes,
         max_extra_edges=extra_edges,
@@ -162,7 +164,7 @@ def run_experiment(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     _write_json(output_dir / "graph.json", {
-        "graph_id": "G0",
+        "graph_id": graph_id,
         "seed": seed,
         "directed": False,
         "labeled": False,
@@ -186,6 +188,8 @@ def run_experiment(
     _write_json(output_dir / "composition_regions.json", region_records(hierarchy))
     _write_json(output_dir / "composition_candidates.json", candidate_records(hierarchy))
     _write_json(output_dir / "hierarchy_summary.json", {
+        "graph_id": graph_id,
+        "seed": seed,
         "root_id": hierarchy.root_id,
         "max_height": hierarchy.max_height,
         "repeatability_by_level": hierarchy.repeatability_by_level,
@@ -213,6 +217,8 @@ def run_experiment(
         "neighborhood": neighborhood_regions,
     }
     enumeration_summary = {}
+    base_pattern_covered_nodes = set().union(*(set(item.nodes) for item in occurrences))
+    match_node_coverage = {}
     for query_id, query in sorted(dataset.queries.items()):
         matches, complete = enumerate_match_records(
             dataset.graph,
@@ -225,8 +231,23 @@ def run_experiment(
             "match_count": len(matches),
             "max_matches": max_matches_per_query,
         }
+        uncovered_match_ids = [
+            record["match_id"] for record in matches
+            if not set(record["host_nodes"]).issubset(base_pattern_covered_nodes)
+        ]
+        match_node_coverage[query_id] = {
+            "match_count": len(matches),
+            "uncovered_match_count": len(uncovered_match_ids),
+            "uncovered_match_ids": uncovered_match_ids[:100],
+            "all_match_nodes_covered": not uncovered_match_ids,
+        }
+        if uncovered_match_ids:
+            raise RuntimeError(
+                f"{query_id} 有 {len(uncovered_match_ids)} 个精确匹配未被基础模式叶子覆盖；"
+                "拒绝生成不满足设计前提的数据。"
+            )
         for record in matches:
-            matches_jsonl.append({"graph_id": "G0", "query_id": query_id, **_match_record(record)})
+            matches_jsonl.append({"graph_id": graph_id, "query_id": query_id, **_match_record(record)})
         for baseline_name, regions in baselines.items():
             rows = evaluate_budgets(
                 dataset.graph,
@@ -238,7 +259,7 @@ def run_experiment(
             )
             for row in rows:
                 row.update({
-                    "graph_id": "G0",
+                    "graph_id": graph_id,
                     "query_id": query_id,
                     "baseline": baseline_name,
                     "available_region_count": len(regions),
@@ -250,9 +271,11 @@ def run_experiment(
 
     _write_jsonl(output_dir / "matches.jsonl", matches_jsonl)
     _write_json(output_dir / "match_enumeration.json", enumeration_summary)
+    _write_json(output_dir / "match_node_coverage.json", match_node_coverage)
     _write_json(output_dir / "oracle_coverage.json", oracle_rows)
     return {
         "output_dir": str(output_dir.resolve()),
+        "graph_id": graph_id,
         "graph_nodes": dataset.graph.number_of_nodes(),
         "graph_edges": dataset.graph.number_of_edges(),
         "query_count": len(dataset.queries),
@@ -261,6 +284,9 @@ def run_experiment(
         "candidate_count": len(hierarchy.candidates),
         "root_id": hierarchy.root_id,
         "index_build_seconds": time.perf_counter() - experiment_started,
+        "all_match_nodes_covered": all(
+            row["all_match_nodes_covered"] for row in match_node_coverage.values()
+        ),
     }
 
 
@@ -268,6 +294,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/overlap_experiment"))
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--graph-id", default="G0")
     parser.add_argument("--copies-per-query", type=int, default=5)
     parser.add_argument("--extra-nodes", type=int, default=15)
     parser.add_argument("--extra-edges", type=int, default=15)
@@ -300,6 +327,7 @@ def main() -> None:
     summary = run_experiment(
         output_dir=args.output_dir,
         seed=args.seed,
+        graph_id=args.graph_id,
         copies_per_query=args.copies_per_query,
         extra_nodes=args.extra_nodes,
         extra_edges=args.extra_edges,

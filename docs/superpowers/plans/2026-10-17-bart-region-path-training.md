@@ -50,6 +50,8 @@ uv run python -c "import torch, transformers, networkx; print(torch.__version__,
 
 - [ ] 为 `generate_synthetic_dataset()` 增加 `graph_id: str = "G0"`；将宿主节点 ID 与 planted provenance 改为包含图 ID 的稳定命名，例如 `G_train_0:tri:copy0:node0`。`make_seed_queries()` 不依赖 graph seed，10 个 query 结构与 ID 在四张图中完全相同。
 - [ ] 为 `run_experiment()` 增加 `graph_id` 参数，传入数据生成器，并将其用于 `graph.json`、`matches.jsonl`、Oracle 行及摘要；保持既有默认行为 `G0`。
+- [ ] 每个植入 query 实例额外加确定性覆盖脚手架：3 节点补成三角形、4 节点补成三叶星、5 节点补成共享中心的两个三角形；原 query 边保留，脚手架边单独写入 provenance。扰动边只在模式覆盖节点间采样，噪声节点保持隔离。
+- [ ] 精确枚举每个 query 的最终匹配后，校验每个匹配节点集合都被三角形/四环/三叶星基础实例覆盖；违反时中止数据构建并写明未覆盖实例。
 - [ ] 新建编排函数，分别以图种子 `7, 8, 9` 生成 `G_train_0..2`，以种子 `10` 生成 `G_test_0`；四张图使用相同的 query 结构、植入次数和扰动上限，各自独立构造模式实例及层次树。
 - [ ] 使用 `tau=0.30`、`max_height=2`、`max_candidates_per_level=5000` 做最小规模运行；每张图的 `hierarchy_summary.json` 必须原样保留 `possible_pair_count`、`explored_pair_count`、`budget_hit` 和 `exhaustive`，不把预算截断结果误报为穷举。
 - [ ] 将四张图的图 ID、随机种子、query ID、split、`tau/R/H`、候选预算、VF2 完整枚举状态写入 `split_manifest.json`；测试图数据只放测试目录，训练数据加载接口禁止枚举该目录。
@@ -74,7 +76,7 @@ artifacts/bart_region_path/
 - [ ] 从 `index_regions.json` 读取仅被索引树选中的区域；以 `hierarchy_summary.json.root_id` 为根，按稳定 `region_id` 排序子节点，计算每个可访问区域的路径。虚拟根使用 `<root>`，路径段采用 `<child_i>`，叶子路径和中间路径都可作为目标。
 - [ ] 对每条完整 VF2 匹配，筛选 `host_nodes` 完全包含于索引树区域的候选，按 `(区域节点数, 路径深度, region_id)` 选择最小区域；若没有普通区域满足，则允许使用覆盖匹配的虚拟 BOS 根。无法定位的匹配保留为未覆盖样本并计数，不伪造路径。
 - [ ] 每个 `(graph_id, query_id)` 输入样本包括确定性 query 边序列和对应索引树上下文；每个图的 host node ID 先按稳定排序转换为图内整数编号。索引上下文包含所有可达区域的路径、组合 token、子节点、覆盖节点编号及由该区域诱导子图计算的节点数/边数摘要。
-- [ ] 为路径 token 和图结构 token 建立固定词表：保留 query/edge/region/模式 token，预分配 `<qnode_0>` 至 `<qnode_7>`、`<node_0>` 至 `<node_499>`、`<child_0>` 至 `<child_2047>`、`<root>`、`<path_sep>`、`<eos>`、`<unk>`。超出预分配范围时明确报错，不静默截断或映射成普通文本。
+- [ ] 为路径 token 和图结构 token 建立固定词表：保留 query/edge/region/模式 token，预分配 `<qnode_0>` 至 `<qnode_7>`、`<node_0>` 至 `<node_499>`、`<child_0>` 至 `<child_2047>`、区域节点数与边数 token、`<root>`、`<path_sep>`、`<eos>`、`<unk>`。超出预分配范围时明确报错，不静默截断或映射成普通文本。
 - [ ] 每个 query 在每张训练图上从完整匹配中用半径 1 的覆盖贪心采样至多 5 个监督实例；把对应路径按稳定顺序连接为目标序列。测试真值不用于词表训练、路径监督、模型选择或早停。
 - [ ] 写出 `path_examples.jsonl`、`path_vocabulary.json`、`region_paths.json`，逐条包含图 ID、query ID、输入 token ID、目标路径、来源 match ID、匹配枚举完整标记和未覆盖原因。
 
@@ -84,7 +86,7 @@ artifacts/bart_region_path/
 - 新建：`bart_region_model.py`
 - 修改：`train_bart_regions.py`
 
-- [ ] 通过 `BartConfig` 构建随机初始化模型：`d_model=128`、encoder/decoder 各 2 层、`encoder_attention_heads=decoder_attention_heads=4`、`encoder_ffn_dim=decoder_ffn_dim=512`、dropout `0.1`；词表大小来自固定词表，输入最大长度 4096，输出最大长度 128。
+- [ ] 通过 `BartConfig` 构建随机初始化模型：`d_model=128`、encoder/decoder 各 2 层、`encoder_attention_heads=decoder_attention_heads=4`、`encoder_ffn_dim=decoder_ffn_dim=512`、dropout `0.1`；词表大小来自固定词表，输入最大长度 4096，输出最大长度 128。位置嵌入容量考虑 BART 的 offset 2。
 - [ ] 使用 `BartForConditionalGeneration` 和固定 seed 训练；batch 内对输入/目标做右侧 padding，target padding 置 `-100`；优化器使用 AdamW，学习率 `3e-4`，weight decay `0.01`，最多 200 epoch，按训练 loss 保存最优 checkpoint，不读取测试指标做早停或调参。
 - [ ] 每个 epoch 用确定性的训练样本顺序或显式记录 shuffle seed；运行配置记录模型结构、随机种子、数据摘要、学习率、batch size、最大长度、epoch 数、beam 数及软件/驱动版本。
 - [ ] 提供 `--device cuda:i` 参数。GPU 数量为 3 时分别启动 seed `17, 23, 29`，显式映射到 `cuda:0/1/2` 并行运行；任意 GPU 不可用时在启动训练前失败，不让多个训练进程争抢同一设备。

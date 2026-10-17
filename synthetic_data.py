@@ -16,6 +16,7 @@ class SyntheticDataset:
     base_patterns: Dict[str, nx.Graph]
     planted: List[Dict[str, Any]]
     seed: int
+    graph_id: str
 
 
 def make_seed_queries() -> Dict[str, nx.Graph]:
@@ -70,6 +71,7 @@ def _copy_with_relation(
     previous_mapping: Mapping[Hashable, Hashable],
     copy_index: int,
     query_id: str,
+    graph_id: str,
     relation: str,
     next_node_id: int,
 ) -> Tuple[Dict[Hashable, Hashable], List[Tuple[Hashable, Hashable]], int]:
@@ -90,7 +92,7 @@ def _copy_with_relation(
 
     for node in query_nodes:
         if node not in new_mapping:
-            new_mapping[node] = f"{query_id}:copy{copy_index}:node{next_node_id}"
+            new_mapping[node] = f"{graph_id}:{query_id}:copy{copy_index}:node{next_node_id}"
             next_node_id += 1
 
     graph.add_nodes_from(new_mapping.values())
@@ -107,9 +109,40 @@ def _copy_with_relation(
     return new_mapping, list(query.edges), next_node_id
 
 
+def _coverage_scaffold_edges(query: nx.Graph) -> List[Tuple[Hashable, Hashable]]:
+    """返回保证 query 每个节点落入三角形/四环/三叶星叶实例的边。"""
+    nodes = list(query.nodes)
+    if len(nodes) == 3:
+        return [(nodes[0], nodes[1]), (nodes[1], nodes[2]), (nodes[2], nodes[0])]
+    if len(nodes) == 4:
+        return [(nodes[0], nodes[index]) for index in range(1, 4)]
+    if len(nodes) == 5:
+        # 两个共享中心节点的三角形，覆盖 5 个节点。
+        return [
+            (nodes[0], nodes[1]), (nodes[1], nodes[2]), (nodes[2], nodes[0]),
+            (nodes[0], nodes[3]), (nodes[3], nodes[4]), (nodes[4], nodes[0]),
+        ]
+    raise ValueError("当前覆盖脚手架只支持 3、4、5 节点 query。")
+
+
+def _add_coverage_scaffold(
+    graph: nx.Graph,
+    query: nx.Graph,
+    mapping: Mapping[Hashable, Hashable],
+) -> List[Tuple[Hashable, Hashable]]:
+    added = []
+    for source, target in _coverage_scaffold_edges(query):
+        edge = (mapping[source], mapping[target])
+        if not graph.has_edge(*edge):
+            graph.add_edge(*edge)
+            added.append(edge)
+    return added
+
+
 def generate_synthetic_dataset(
     *,
     seed: int = 7,
+    graph_id: str = "G0",
     copies_per_query: int = 5,
     max_extra_nodes: int = 15,
     max_extra_edges: int = 15,
@@ -120,6 +153,8 @@ def generate_synthetic_dataset(
     """
     if copies_per_query < 5:
         raise ValueError("每种 query 至少植入 5 次。")
+    if not graph_id or not isinstance(graph_id, str):
+        raise ValueError("graph_id 必须是非空字符串。")
     if max_extra_nodes < 0 or max_extra_nodes > 15:
         raise ValueError("max_extra_nodes 必须在 0 到 15 之间。")
     if max_extra_edges < 0 or max_extra_edges > 15:
@@ -136,7 +171,7 @@ def generate_synthetic_dataset(
         for copy_index in range(copies_per_query):
             if copy_index == 0:
                 mapping = {
-                    node: f"{query_id}:copy0:node{index}"
+                    node: f"{graph_id}:{query_id}:copy0:node{index}"
                     for index, node in enumerate(query.nodes)
                 }
                 graph.add_nodes_from(mapping.values())
@@ -153,36 +188,42 @@ def generate_synthetic_dataset(
                     previous_mapping,
                     copy_index,
                     query_id,
+                    graph_id,
                     relation,
                     0,
                 )
+            scaffold_edges = _add_coverage_scaffold(graph, query, mapping)
             planted.append(
                 {
+                    "graph_id": graph_id,
                     "query_id": query_id,
                     "copy_id": f"{query_id}#{copy_index + 1}",
                     "relation_to_previous": relation,
                     "query_to_graph": dict(mapping),
+                    "coverage_scaffold_edges": scaffold_edges,
                 }
             )
             previous_mapping = mapping
 
+    covered_host_nodes = set(graph.nodes)
     if graph.number_of_nodes() + max_extra_nodes >= 500:
         raise ValueError("植入图过大，无法满足最终节点数小于 500 的约束。")
 
     extra_node_count = rng.randint(0, max_extra_nodes)
     next_index = 0
     while extra_node_count:
-        node = f"noise:node{next_index}"
+        node = f"{graph_id}:noise:node{next_index}"
         next_index += 1
         if node not in graph:
             graph.add_node(node)
             extra_node_count -= 1
 
     extra_edge_count = rng.randint(0, max_extra_edges)
+    ordered_covered_nodes = sorted(covered_host_nodes, key=repr)
     available_pairs = [
         (left, right)
-        for index, left in enumerate(graph.nodes)
-        for right in list(graph.nodes)[index + 1 :]
+        for index, left in enumerate(ordered_covered_nodes)
+        for right in ordered_covered_nodes[index + 1 :]
         if not graph.has_edge(left, right)
     ]
     rng.shuffle(available_pairs)
@@ -192,13 +233,16 @@ def generate_synthetic_dataset(
     if graph.number_of_nodes() >= 500:
         raise ValueError("生成后的 G 必须少于 500 个节点。")
 
-    graph.graph.update({"seed": seed, "directed": False, "labeled": False})
+    graph.graph.update(
+        {"graph_id": graph_id, "seed": seed, "directed": False, "labeled": False}
+    )
     return SyntheticDataset(
         graph=graph,
         queries=queries,
         base_patterns=make_base_patterns(),
         planted=planted,
         seed=seed,
+        graph_id=graph_id,
     )
 
 

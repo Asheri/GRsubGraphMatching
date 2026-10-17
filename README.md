@@ -133,3 +133,27 @@ uv run python run_experiment.py `
 - 上游命令行、输入格式和模式文本格式见 FLEXIS 的 [README](https://github.com/akshit-sharma/flexis#readme)。
 - GCon 对超节点、摘要信息和逆收缩的定义见 [Making graphs compact by lossless contraction](https://link.springer.com/article/10.1007/s00778-022-00731-7)。
 - query 子图匹配使用 NetworkX [VF2 文档](https://networkx.org/documentation/stable/reference/algorithms/isomorphism.vf2.html)；VF3 官方库为 [MiviaLab/vf3lib](https://github.com/MiviaLab/vf3lib)。
+
+## BART 区域路径生成最小实验
+
+该实验固定同一组 10 个无标签无向 query，使用 3 张独立训练图和 1 张独立测试图。每个植入 query 实例额外加入三角形、三叶星或两个共享中心三角形脚手架，保证植入节点有基础叶覆盖；最终匹配仍在扰动后的完整图上用非诱导 VF2 枚举，并验证匹配节点都被基础叶实例覆盖。额外随机节点保持隔离。
+
+模型输入是 query 的节点/边序列与索引树的区域路径、模式 token、覆盖节点和规模摘要；目标是半径 1 覆盖贪心选出的至多 5 条区域路径。推理路径先映射回测试图的区域，再对区域诱导子图做精确 VF2 验证。实验报告 Recall@1、Recall@5、Precision@5、F1@5、PathValidity@5，以及验证成本，并和最小区域、固定随机区域、半径 1 邻域基线对照。测试图不进入训练样本或训练损失；query 结构固定，因此该实验验证的是固定 query 集上的跨图泛化。
+
+在服务器同步代码后执行：
+
+```bash
+uv sync --locked
+uv run python train_bart_regions.py prepare --output-dir artifacts/bart_region_path
+nvidia-smi
+uv run python train_bart_regions.py train-all \
+  --data-dir artifacts/bart_region_path \
+  --runs-dir artifacts/bart_region_path/runs \
+  --epochs 30
+uv run python train_bart_regions.py evaluate \
+  --data-dir artifacts/bart_region_path \
+  --runs-dir artifacts/bart_region_path/runs \
+  --output-dir artifacts/bart_region_path/report
+```
+
+`train-all` 要求正好 3 张可用 GPU，并将 seed 17/23/29 分别固定到 `cuda:0/1/2` 同时训练。评估同样并行使用三张卡。`prepare` 生成 3+1 图、实例级路径标签与 split manifest；`runs/` 保存训练曲线和最优检查点；`report/metrics_summary.json` 汇总三个训练 seed 的均值/标准差和基线。该合成小实验用于确认端到端流程与观察训练趋势，不构成真实图或未见 query 上的泛化证据。
