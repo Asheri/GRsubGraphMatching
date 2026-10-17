@@ -18,7 +18,12 @@ import transformers
 from transformers import BartForConditionalGeneration
 
 from bart_region_model import generate_paths, make_model, set_seed
-from region_path_data import FixedVocabulary, _region_paths, build_graph_examples
+from region_path_data import (
+    MAX_RETRIEVAL_REGION_SIZE,
+    FixedVocabulary,
+    _region_paths,
+    build_graph_examples,
+)
 from run_experiment import run_experiment
 from subgraph_sampling import enumerate_query_matches
 
@@ -135,6 +140,7 @@ def prepare(
         "R": "每张图按基础叶引用计算的最低可行重复预算",
         "H": 2,
         "candidate_budget_per_level": 5000,
+        "max_retrieval_region_size": MAX_RETRIEVAL_REGION_SIZE,
         "test_graph_in_training_examples": False,
         "train_example_count": len(train_rows),
         "test_example_count": len(test_rows),
@@ -286,30 +292,35 @@ def _evaluate_regions(
     *,
     max_regions: int = 5,
     node_budget: int = 250,
-) -> Tuple[List[Dict[str, Any]], int, int]:
+) -> Tuple[List[Dict[str, Any]], int, int, set]:
     found: Dict[Any, Dict[str, Any]] = {}
     verification_nodes = 0
     verification_edges = 0
     verified_regions = 0
+    regions_with_matches = set()
     for region_id in predicted_region_ids:
         if verified_regions >= max_regions:
             break
         nodes = set(regions[region_id].get("covered_nodes", []))
-        if not nodes or verification_nodes + len(nodes) > node_budget:
+        if (
+            not nodes
+            or regions[region_id].get("is_virtual", False)
+            or len(nodes) > MAX_RETRIEVAL_REGION_SIZE
+            or verification_nodes + len(nodes) > node_budget
+        ):
             continue
         verified_regions += 1
         verification_nodes += len(nodes)
         induced = graph.subgraph(nodes).copy()
         verification_edges += induced.number_of_edges()
         mappings, _complete = enumerate_query_matches(induced, query, max_matches=1000)
+        if mappings:
+            regions_with_matches.add(region_id)
         for mapping in mappings:
             key = _instance_key(query, mapping)
-            found.setdefault(key, {"region_id": region_id, "query_to_graph": mapping})
-            if len(found) >= 5:
-                break
-        if len(found) >= 5:
-            break
-    return list(found.values()), verification_nodes, verification_edges
+            if len(found) < 5:
+                found.setdefault(key, {"region_id": region_id, "query_to_graph": mapping})
+    return list(found.values()), verification_nodes, verification_edges, regions_with_matches
 
 
 def _truth_keys(graph_dir: Path, query_id: str, query: nx.Graph) -> Tuple[set, bool]:
@@ -381,10 +392,24 @@ def _evaluate_one_seed(data_dir: Path, runs_dir: Path, output_dir: Path, seed: i
         started = time.perf_counter()
         outputs = generate_paths(model, example["input_ids"], device=device)
         inference_seconds = time.perf_counter() - started
+        top_path_region_id = None
+        if outputs:
+            top_paths, _ = _path_sequences(outputs[0], id_to_token)
+            if top_paths:
+                candidate_id = path_to_region.get(top_paths[0])
+                if candidate_id is not None:
+                    candidate = region_by_id[candidate_id]
+                    if (
+                        not candidate.get("is_virtual", False)
+                        and len(candidate.get("covered_nodes", [])) <= MAX_RETRIEVAL_REGION_SIZE
+                    ):
+                        top_path_region_id = candidate_id
         predicted_region_ids = []
         valid_paths = 0
         invalid_reasons: Dict[str, int] = {}
         for output in outputs:
+            if len(predicted_region_ids) >= 5:
+                break
             paths, parse_errors = _path_sequences(output, id_to_token)
             for reason in parse_errors:
                 invalid_reasons[reason] = invalid_reasons.get(reason, 0) + 1
@@ -396,13 +421,17 @@ def _evaluate_one_seed(data_dir: Path, runs_dir: Path, output_dir: Path, seed: i
                     invalid_reasons["unreachable_path"] = invalid_reasons.get("unreachable_path", 0) + 1
                 elif region_id in predicted_region_ids:
                     invalid_reasons["duplicate_path"] = invalid_reasons.get("duplicate_path", 0) + 1
+                elif region_by_id[region_id].get("is_virtual", False):
+                    invalid_reasons["virtual_root_not_retrievable"] = invalid_reasons.get("virtual_root_not_retrievable", 0) + 1
+                elif len(region_by_id[region_id].get("covered_nodes", [])) > MAX_RETRIEVAL_REGION_SIZE:
+                    invalid_reasons["oversize_region"] = invalid_reasons.get("oversize_region", 0) + 1
                 else:
                     predicted_region_ids.append(region_id)
-                    valid_paths += 1
         query_started = time.perf_counter()
-        retrieved, verify_nodes, verify_edges = _evaluate_regions(
+        retrieved, verify_nodes, verify_edges, regions_with_matches = _evaluate_regions(
             graph, query, predicted_region_ids, region_by_id
         )
+        valid_paths = len(regions_with_matches)
         match_seconds = time.perf_counter() - query_started
         truth, complete = _truth_keys(test_dir, query_id, query)
         retrieved_with_keys = []
@@ -414,9 +443,9 @@ def _evaluate_one_seed(data_dir: Path, runs_dir: Path, output_dir: Path, seed: i
                 "query_to_graph": item["query_to_graph"],
             })
         first_has_match = False
-        if predicted_region_ids:
-            first_results, _, _ = _evaluate_regions(
-                graph, query, predicted_region_ids[:1], region_by_id, max_regions=1
+        if top_path_region_id is not None:
+            first_results, _, _, _ = _evaluate_regions(
+                graph, query, [top_path_region_id], region_by_id, max_regions=1
             )
             first_has_match = any(_instance_key(query, item["query_to_graph"]) in truth for item in first_results)
         metrics = _metric_row(
@@ -522,7 +551,10 @@ def _mean_std(rows: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
 def _evaluate_baselines(graph, query_records, test_dir, region_records, region_paths):
     rows = []
     region_by_id = {row["region_id"]: row for row in region_records}
-    regular = [row for row in region_records if not row.get("is_virtual")]
+    regular = [
+        row for row in region_records
+        if not row.get("is_virtual") and len(row.get("covered_nodes", [])) <= MAX_RETRIEVAL_REGION_SIZE
+    ]
     neighborhood = []
     for index, node in enumerate(sorted(graph.nodes, key=repr)):
         nodes = set(nx.single_source_shortest_path_length(graph, node, cutoff=1))
@@ -548,18 +580,18 @@ def _evaluate_baselines(graph, query_records, test_dir, region_records, region_p
                 if refs + cost <= 250:
                     refs += cost
                     chosen.append(region_id)
-            retrieved, work_nodes, work_edges = _evaluate_regions(graph, query, chosen, region_by_id)
+            retrieved, work_nodes, work_edges, valid_regions = _evaluate_regions(graph, query, chosen, region_by_id)
             keys = {_instance_key(query, item["query_to_graph"]) for item in retrieved}
             true_hits = len(keys & truth)
             recall = true_hits / len(truth) if truth else None
             precision = true_hits / 5 if truth else None
-            first, _, _ = _evaluate_regions(graph, query, chosen[:1], region_by_id, max_regions=1)
+            first, _, _, _ = _evaluate_regions(graph, query, chosen[:1], region_by_id, max_regions=1)
             row = {
                 "query_id": query_id, "truth_count": len(truth), "retrieved_instance_count": len(retrieved),
                 "Recall@1": int(any(_instance_key(query, item["query_to_graph"]) in truth for item in first)) if truth else None,
                 "Recall@5": recall, "Precision@5": precision,
                 "F1@5": 2 * precision * recall / (precision + recall) if truth and precision + recall else 0.0,
-                "PathValidity@5": 1.0 if chosen else 0.0, "valid_path_count": len(chosen),
+                "PathValidity@5": len(valid_regions) / 5, "valid_path_count": len(valid_regions),
                 "generated_path_count": 5, "verification_node_work": work_nodes,
                 "verification_edge_work": work_edges, "retrieval_seconds": None,
                 "match_enumeration_complete": complete, "metric_is_estimate": not complete,
@@ -570,21 +602,23 @@ def _evaluate_baselines(graph, query_records, test_dir, region_records, region_p
         found = {}
         work_nodes = work_edges = 0
         checked_regions = 0
+        valid_neighborhoods = 0
         for region in neighborhood:
-            if len(found) >= 5 or checked_regions >= 5:
+            if checked_regions >= 5:
                 break
             cost = len(region["covered_nodes"])
-            if work_nodes + cost > 250:
+            if cost > MAX_RETRIEVAL_REGION_SIZE or work_nodes + cost > 250:
                 continue
             work_nodes += cost
             checked_regions += 1
             subgraph = graph.subgraph(region["covered_nodes"]).copy()
             work_edges += subgraph.number_of_edges()
             matches, _ = enumerate_query_matches(subgraph, query, max_matches=1000)
+            if matches:
+                valid_neighborhoods += 1
             for mapping in matches:
-                found.setdefault(_instance_key(query, mapping), {"query_to_graph": mapping})
-                if len(found) >= 5:
-                    break
+                if len(found) < 5:
+                    found.setdefault(_instance_key(query, mapping), {"query_to_graph": mapping})
         keys = set(found) & truth
         recall = len(keys) / len(truth) if truth else None
         precision = len(keys) / 5 if truth else None
@@ -593,7 +627,7 @@ def _evaluate_baselines(graph, query_records, test_dir, region_records, region_p
             "Recall@1": int(bool(keys)) if truth else None, "Recall@5": recall,
             "Precision@5": precision,
             "F1@5": 2 * precision * recall / (precision + recall) if truth and precision + recall else 0.0,
-            "PathValidity@5": checked_regions / 5, "valid_path_count": checked_regions,
+            "PathValidity@5": valid_neighborhoods / 5, "valid_path_count": valid_neighborhoods,
             "generated_path_count": 5, "verification_node_work": work_nodes,
             "verification_edge_work": work_edges, "retrieval_seconds": None,
             "match_enumeration_complete": complete, "metric_is_estimate": not complete,

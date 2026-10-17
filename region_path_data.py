@@ -15,6 +15,7 @@ SPECIAL_TOKENS = [
     "<path_sep>", "<root>", "<tri>", "<square>", "<star>", "<diamond>",
     "<butterfly>", "<composition>", "<neighborhood>",
 ]
+MAX_RETRIEVAL_REGION_SIZE = 12
 
 
 class FixedVocabulary:
@@ -156,7 +157,7 @@ def build_graph_examples(graph_dir: Path, *, split: str, vocabulary: FixedVocabu
         region_options = []
         for region_id, region in region_by_id.items():
             region_nodes = set(region.get("covered_nodes", []))
-            if region_nodes:
+            if region_nodes and not region.get("is_virtual", False) and len(region_nodes) <= MAX_RETRIEVAL_REGION_SIZE:
                 region_options.append((len(region_nodes), len(paths[region_id]), region_id, region_nodes))
         targets = []
         missing = []
