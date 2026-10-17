@@ -138,8 +138,8 @@ def build_graph_examples(graph_dir: Path, *, split: str, vocabulary: FixedVocabu
             "<stats>", f"<count_{min(len(covered), 500)}>", f"<edges_{min(induced_edges, 2048)}>",
         ])
 
-    all_matches = _read_jsonl(graph_dir / "matches.jsonl")
-    enumeration = _load_json(graph_dir / "match_enumeration.json")
+    all_matches = _read_jsonl(graph_dir / "matches.jsonl") if split == "train" else []
+    enumeration = _load_json(graph_dir / "match_enumeration.json") if split == "train" else {}
     examples: List[Dict[str, Any]] = []
     uncovered: Dict[str, List[str]] = {}
     for query_id, query_record in sorted(query_json.items()):
@@ -183,15 +183,20 @@ def build_graph_examples(graph_dir: Path, *, split: str, vocabulary: FixedVocabu
             target_tokens.append("<path_sep>")
             source_matches.append(match["match_id"])
         target_tokens.append("<eos>")
-        examples.append({
+        example = {
             "graph_id": graph_json["graph_id"], "query_id": query_id, "split": split,
-            "input_ids": input_ids, "target_ids": vocabulary.encode(target_tokens),
-            "target_paths": [list(paths[label[2]]) for match, label in selected_targets],
-            "target_region_ids": [label[2] for match, label in selected_targets],
-            "source_match_ids": source_matches,
-            "match_enumeration_complete": enumeration[query_id]["complete"],
-            "positive_match_count": len(query_matches), "selected_match_count": len(selected_targets),
-        })
+            "input_ids": input_ids,
+        }
+        if split == "train":
+            example.update({
+                "target_ids": vocabulary.encode(target_tokens),
+                "target_paths": [list(paths[label[2]]) for match, label in selected_targets],
+                "target_region_ids": [label[2] for match, label in selected_targets],
+                "source_match_ids": source_matches,
+                "match_enumeration_complete": enumeration[query_id]["complete"],
+                "positive_match_count": len(query_matches), "selected_match_count": len(selected_targets),
+            })
+        examples.append(example)
     (graph_dir / "path_examples.jsonl").write_text(
         "".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in examples),
         encoding="utf-8",
@@ -201,7 +206,7 @@ def build_graph_examples(graph_dir: Path, *, split: str, vocabulary: FixedVocabu
         "query_count": len(query_json), "example_count": len(examples),
         "uncovered_matches_by_query": {key: len(value) for key, value in uncovered.items()},
         "max_input_tokens": max((len(row["input_ids"]) for row in examples), default=0),
-        "max_target_tokens": max((len(row["target_ids"]) for row in examples), default=0),
+        "max_target_tokens": max((len(row["target_ids"]) for row in examples if "target_ids" in row), default=0),
     }
 
 
