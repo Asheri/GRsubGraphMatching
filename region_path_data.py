@@ -20,7 +20,7 @@ SPECIAL_TOKENS = [
 class FixedVocabulary:
     """实验期间固定的结构 token 词表，越界时明确失败。"""
 
-    def __init__(self, graph_node_limit: int = 499, child_limit: int = 2047, query_node_limit: int = 7):
+    def __init__(self, graph_node_limit: int = 499, child_limit: int = 4095, query_node_limit: int = 7):
         tokens = list(SPECIAL_TOKENS)
         tokens.extend(f"<qnode_{index}>" for index in range(query_node_limit + 1))
         tokens.extend(f"<node_{index}>" for index in range(graph_node_limit + 1))

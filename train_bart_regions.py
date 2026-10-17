@@ -50,13 +50,40 @@ def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
 
 
-def prepare(output_dir: Path, *, max_matches_per_query: int = 100000) -> Dict[str, Any]:
+def prepare(
+    output_dir: Path,
+    *,
+    max_matches_per_query: int = 100000,
+    reuse_graph_artifacts: bool = False,
+) -> Dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     graph_specs = [(graph_id, seed, "train") for graph_id, seed in TRAIN_SPECS]
     graph_specs.append((TEST_SPEC[0], TEST_SPEC[1], "test"))
     summaries = []
     for graph_id, seed, split in graph_specs:
         graph_dir = output_dir / split / graph_id
+        if reuse_graph_artifacts:
+            required = ["graph.json", "queries.json", "index_regions.json", "matches.jsonl", "match_enumeration.json"]
+            missing = [name for name in required if not (graph_dir / name).is_file()]
+            if missing:
+                raise FileNotFoundError(f"{graph_id} 缺少可复用产物：{', '.join(missing)}")
+            graph_record = _read_json(graph_dir / "graph.json")
+            hierarchy_record = _read_json(graph_dir / "hierarchy_summary.json")
+            summaries.append({
+                "output_dir": str(graph_dir.resolve()), "graph_id": graph_id,
+                "graph_nodes": len(graph_record["nodes"]), "graph_edges": len(graph_record["edges"]),
+                "query_count": len(_read_json(graph_dir / "queries.json")),
+                "pattern_type_count": len(_read_json(graph_dir / "pattern_vocabulary.json")),
+                "occurrence_count": len(_read_json(graph_dir / "pattern_occurrences.json")),
+                "candidate_count": len(_read_json(graph_dir / "composition_candidates.json")),
+                "root_id": hierarchy_record["root_id"],
+                "index_build_seconds": hierarchy_record["index_build_seconds"],
+                "all_match_nodes_covered": all(
+                    row["all_match_nodes_covered"]
+                    for row in _read_json(graph_dir / "match_node_coverage.json").values()
+                ),
+            })
+            continue
         summaries.append(run_experiment(
             output_dir=graph_dir,
             seed=seed,
@@ -609,6 +636,7 @@ def main() -> None:
     prepare_parser = commands.add_parser("prepare")
     prepare_parser.add_argument("--output-dir", type=Path, required=True)
     prepare_parser.add_argument("--max-matches-per-query", type=int, default=100000)
+    prepare_parser.add_argument("--reuse-graph-artifacts", action="store_true")
     train_parser = commands.add_parser("train")
     train_parser.add_argument("--data-dir", type=Path, required=True)
     train_parser.add_argument("--run-dir", type=Path, required=True)
@@ -625,7 +653,11 @@ def main() -> None:
     eval_parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "prepare":
-        result = prepare(args.output_dir, max_matches_per_query=args.max_matches_per_query)
+        result = prepare(
+            args.output_dir,
+            max_matches_per_query=args.max_matches_per_query,
+            reuse_graph_artifacts=args.reuse_graph_artifacts,
+        )
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.command == "train":
         result = train(args.data_dir, args.run_dir, seed=args.seed, device_name=args.device, epochs=args.epochs)

@@ -76,7 +76,7 @@ artifacts/bart_region_path/
 - [ ] 从 `index_regions.json` 读取仅被索引树选中的区域；以 `hierarchy_summary.json.root_id` 为根，按稳定 `region_id` 排序子节点，计算每个可访问区域的路径。虚拟根使用 `<root>`，路径段采用 `<child_i>`，叶子路径和中间路径都可作为目标。
 - [ ] 对每条完整 VF2 匹配，筛选 `host_nodes` 完全包含于索引树区域的候选，按 `(区域节点数, 路径深度, region_id)` 选择最小区域；若没有普通区域满足，则允许使用覆盖匹配的虚拟 BOS 根。无法定位的匹配保留为未覆盖样本并计数，不伪造路径。
 - [ ] 每个 `(graph_id, query_id)` 输入样本包括确定性 query 边序列和对应索引树上下文；每个图的 host node ID 先按稳定排序转换为图内整数编号。索引上下文包含所有可达区域的路径、组合 token、子节点、覆盖节点编号及由该区域诱导子图计算的节点数/边数摘要。
-- [ ] 为路径 token 和图结构 token 建立固定词表：保留 query/edge/region/模式 token，预分配 `<qnode_0>` 至 `<qnode_7>`、`<node_0>` 至 `<node_499>`、`<child_0>` 至 `<child_2047>`、区域节点数与边数 token、`<root>`、`<path_sep>`、`<eos>`、`<unk>`。超出预分配范围时明确报错，不静默截断或映射成普通文本。
+- [ ] 为路径 token 和图结构 token 建立固定词表：保留 query/edge/region/模式 token，预分配 `<qnode_0>` 至 `<qnode_7>`、`<node_0>` 至 `<node_499>`、`<child_0>` 至 `<child_4095>`、区域节点数与边数 token、`<root>`、`<path_sep>`、`<eos>`、`<unk>`。预实验测得最大树分支为 2121，故将子节点容量扩至 4095；超出预分配范围时明确报错，不静默截断或映射成普通文本。
 - [ ] 每个 query 在每张训练图上从完整匹配中用半径 1 的覆盖贪心采样至多 5 个监督实例；把对应路径按稳定顺序连接为目标序列。测试真值不用于词表训练、路径监督、模型选择或早停。
 - [ ] 写出 `path_examples.jsonl`、`path_vocabulary.json`、`region_paths.json`，逐条包含图 ID、query ID、输入 token ID、目标路径、来源 match ID、匹配枚举完整标记和未覆盖原因。
 
