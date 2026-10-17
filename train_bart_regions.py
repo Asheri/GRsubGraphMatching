@@ -535,13 +535,15 @@ def _evaluate_baselines(graph, query_records, test_dir, region_records, region_p
         # 固定半径邻域对照不要求该区域属于路径树。
         found = {}
         work_nodes = work_edges = 0
+        checked_regions = 0
         for region in neighborhood:
-            if len(found) >= 5:
+            if len(found) >= 5 or checked_regions >= 5:
                 break
             cost = len(region["covered_nodes"])
             if work_nodes + cost > 250:
                 continue
             work_nodes += cost
+            checked_regions += 1
             subgraph = graph.subgraph(region["covered_nodes"]).copy()
             work_edges += subgraph.number_of_edges()
             matches, _ = enumerate_query_matches(subgraph, query, max_matches=1000)
@@ -557,7 +559,7 @@ def _evaluate_baselines(graph, query_records, test_dir, region_records, region_p
             "Recall@1": int(bool(keys)) if truth else None, "Recall@5": recall,
             "Precision@5": precision,
             "F1@5": 2 * precision * recall / (precision + recall) if truth and precision + recall else 0.0,
-            "PathValidity@5": 1.0, "valid_path_count": min(5, len(neighborhood)),
+            "PathValidity@5": checked_regions / 5, "valid_path_count": checked_regions,
             "generated_path_count": 5, "verification_node_work": work_nodes,
             "verification_edge_work": work_edges, "retrieval_seconds": None,
             "match_enumeration_complete": complete, "metric_is_estimate": not complete,
